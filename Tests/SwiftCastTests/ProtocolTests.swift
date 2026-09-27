@@ -85,3 +85,27 @@ extension Data {
 
     var hexString: String { map { String(format: "%02x", $0) }.joined() }
 }
+
+@Suite("Fuzzing")
+struct WireFuzzTests {
+    /// Arbitrary bytes must never crash the frame decoder or protobuf parser.
+    @Test func survivesRandomBytes() {
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<5000 {
+            let count = Int.random(in: 0..<200, using: &generator)
+            let bytes = Data((0..<count).map { _ in UInt8.random(in: 0...255, using: &generator) })
+            _ = try? CastMessage(serializedData: bytes)
+            var decoder = FrameDecoder()
+            var framed = Data([0, 0, 0, UInt8(min(count, 255))])
+            framed.append(bytes)
+            _ = try? decoder.append(framed)
+        }
+    }
+
+    @Test func survivesTruncatedValidMessages() {
+        let valid = ProtocolTests.ping.serialized()
+        for length in 0..<valid.count {
+            _ = try? CastMessage(serializedData: valid.prefix(length))
+        }
+    }
+}
