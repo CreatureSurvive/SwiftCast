@@ -1,0 +1,148 @@
+import Foundation
+import Testing
+@testable import SwiftCast
+
+@Suite("MediaController", .timeLimit(.minutes(1)))
+struct MediaControllerTests {
+    func connectedClient(appRunning: Bool = false) async throws -> (CastClient, MockReceiver) {
+        let mock = MockReceiver()
+        Fixtures.installDefaultReceiver(on: mock, appRunning: appRunning)
+        let client = CastClient { mock }
+        try await client.connect()
+        return (client, mock)
+    }
+
+    @Test func launchesAndLoadsMedia() async throws {
+        let (client, mock) = try await connectedClient()
+        let media = try await client.launchMediaReceiver()
+        #expect(mock.sentMessages(ofType: "LAUNCH").count == 1)
+        #expect(mock.sentMessages(ofType: "CONNECT").contains { $0.destinationID == Fixtures.transportID })
+
+        let status = try await media.load(
+            MediaInformation(url: URL(string: "https://example.com/video.mp4")!, contentType: "video/mp4", metadata: .movie(title: "Big Buck Bunny")),
+            startTime: 30
+        )
+        #expect(status.mediaSessionId == 1)
+        #expect(status.currentTime == 30)
+        let load = try #require(mock.sentMessages(ofType: "LOAD").first)
+        #expect(load.destinationID == Fixtures.transportID)
+        #expect(load.json?["sessionId"]?.stringValue == Fixtures.sessionID)
+        #expect(load.json?["media"]?["metadata"]?["title"]?.stringValue == "Big Buck Bunny")
+        #expect(load.json?["autoplay"]?.boolValue == true)
+    }
+
+    @Test func joinsRunningAppInsteadOfRelaunching() async throws {
+        let (client, mock) = try await connectedClient(appRunning: true)
+        _ = try await client.launchMediaReceiver()
+        #expect(mock.sentMessages(ofType: "LAUNCH").isEmpty)
+    }
+
+    @Test func commandsRequireAMediaSession() async throws {
+        let (client, _) = try await connectedClient()
+        let media = try await client.launchMediaReceiver()
+        await #expect(throws: CastError.noMediaSession) { try await media.pause() }
+    }
+
+    @Test func transportCommandsUseSessionAndPreserveMediaInfo() async throws {
+        let (client, mock) = try await connectedClient()
+        let media = try await client.launchMediaReceiver()
+        try await media.load(MediaInformation(url: URL(string: "https://example.com/video.mp4")!, contentType: "video/mp4"))
+
+        let paused = try #require(try await media.pause())
+        #expect(paused.playerState == .paused)
+        // PAUSE response omitted `media`; it is carried over from LOAD.
+        #expect(paused.media?.duration == 596.5)
+        #expect(mock.sentMessages(ofType: "PAUSE").first?.json?["mediaSessionId"]?.intValue == 1)
+
+        let sought = try #require(try await media.seek(to: 100, resumeState: .playbackStart))
+        #expect(sought.currentTime == 100)
+        let seek = try #require(mock.sentMessages(ofType: "SEEK").first)
+        #expect(seek.json?["resumeState"]?.stringValue == "PLAYBACK_START")
+
+        _ = try await media.play()
+        #expect(await media.status?.playerState == .playing)
+    }
+
+    @Test func statusUpdatesStreamUnsolicitedChanges() async throws {
+        let (client, mock) = try await connectedClient()
+        let media = try await client.launchMediaReceiver()
+        try await media.load(MediaInformation(url: URL(string: "https://example.com/video.mp4")!, contentType: "video/mp4"))
+        let updates = await media.statusUpdates()
+
+        mock.push(Fixtures.mediaStatus(sessionID: 1, state: "PLAYING", time: 5, includeMedia: false), namespace: .media, from: Fixtures.transportID, to: "*")
+        var states: [PlayerState?] = []
+        for await status in updates {
+            states.append(status?.playerState)
+            if status?.playerState == .playing { break }
+        }
+        #expect(states.first == .buffering) // initial value
+        #expect(states.last == .playing)
+        #expect(await media.status?.media?.metadata?.title == "Big Buck Bunny")
+    }
+
+    @Test func ignoresMediaStatusFromOtherApps() async throws {
+        let (client, mock) = try await connectedClient()
+        let media = try await client.launchMediaReceiver()
+        mock.push(Fixtures.mediaStatus(sessionID: 9), namespace: .media, from: "some-other-app", to: "*")
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await media.status == nil)
+    }
+
+    @Test func sessionClosesWhenAppStops() async throws {
+        let (client, mock) = try await connectedClient()
+        let media = try await client.launchMediaReceiver()
+        try await media.load(MediaInformation(url: URL(string: "https://example.com/video.mp4")!, contentType: "video/mp4"))
+
+        mock.push(Fixtures.receiverStatus(apps: []), namespace: .receiver, to: "*")
+        try await eventually { await media.isClosed }
+        #expect(await media.status == nil)
+        await #expect(throws: CastError.self) { try await media.pause() }
+    }
+
+    @Test func sessionClosesOnVirtualConnectionClose() async throws {
+        let (client, mock) = try await connectedClient()
+        let media = try await client.launchMediaReceiver()
+        mock.push(["type": "CLOSE"], namespace: .connection, from: Fixtures.transportID)
+        try await eventually { await media.isClosed }
+        #expect(await client.state == .connected)
+        #expect(await client.isConnected(to: Fixtures.transportID) == false)
+    }
+
+    @Test func loadFailureIsThrown() async throws {
+        let (client, mock) = try await connectedClient()
+        mock.on("LOAD") { request, mock in
+            mock.reply(to: request, ["type": "LOAD_FAILED", "detailedErrorCode": 104])
+        }
+        let media = try await client.launchMediaReceiver()
+        await #expect(throws: CastError.loadFailed(reason: nil, detailedErrorCode: 104)) {
+            try await media.load(MediaInformation(url: URL(string: "https://example.com/missing.mp4")!, contentType: "video/mp4"))
+        }
+    }
+
+    @Test func queueAndTrackCommandsEncodeCorrectly() async throws {
+        let (client, mock) = try await connectedClient()
+        mock.on("QUEUE_LOAD") { request, mock in mock.reply(to: request, Fixtures.mediaStatus(sessionID: 7)) }
+        for type in ["QUEUE_UPDATE", "EDIT_TRACKS_INFO", "QUEUE_REMOVE"] {
+            mock.on(type) { request, mock in mock.reply(to: request, Fixtures.mediaStatus(sessionID: 7, includeMedia: false)) }
+        }
+        let media = try await client.launchMediaReceiver()
+        let item = QueueItem(media: MediaInformation(url: URL(string: "https://example.com/1.mp3")!, contentType: "audio/mpeg", metadata: .musicTrack(title: "One")))
+        let status = try await media.loadQueue([item, item], startIndex: 1, repeatMode: .all)
+        #expect(status.mediaSessionId == 7)
+        let load = try #require(mock.sentMessages(ofType: "QUEUE_LOAD").first)
+        #expect(load.json?["items"]?.arrayValue?.count == 2)
+        #expect(load.json?["repeatMode"]?.stringValue == "REPEAT_ALL")
+        #expect(load.json?["startIndex"]?.intValue == 1)
+
+        try await media.next()
+        try await media.previous()
+        try await media.setActiveTracks([2], textTrackStyle: TextTrackStyle(foregroundColor: "#FFFFFFFF", fontScale: 1.2))
+        try await media.remove(itemIDs: [3])
+        let updates = mock.sentMessages(ofType: "QUEUE_UPDATE")
+        #expect(updates.map { $0.json?["jump"]?.intValue } == [1, -1])
+        let edit = try #require(mock.sentMessages(ofType: "EDIT_TRACKS_INFO").first)
+        #expect(edit.json?["activeTrackIds"] == [2])
+        #expect(edit.json?["textTrackStyle"]?["fontScale"]?.doubleValue == 1.2)
+        #expect(mock.sentMessages(ofType: "QUEUE_REMOVE").first?.json?["itemIds"] == [3])
+    }
+}
