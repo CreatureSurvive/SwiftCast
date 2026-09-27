@@ -153,10 +153,17 @@ public actor CastClient {
         startHeartbeat(generation: currentGeneration)
     }
 
-    /// Closes all virtual connections and the underlying connection.
+    /// Closes the underlying connection, leaving running applications (and
+    /// their playback) untouched.
+    ///
+    /// Only the platform receiver's virtual connection is closed explicitly.
+    /// Web receivers treat an explicit `CLOSE` from their last sender as a
+    /// request to shut down, so application connections are dropped with the
+    /// socket instead. To end playback, stop the application first with
+    /// ``ReceiverController/stop(_:)``.
     public func disconnect() async {
         guard let transport, state == .connected || state == .connecting else { return }
-        for destination in connectedDestinations {
+        for destination in connectedDestinations where destination == CastEndpoint.platformReceiver {
             let close = CastMessage(
                 sourceID: senderID,
                 destinationID: destination,

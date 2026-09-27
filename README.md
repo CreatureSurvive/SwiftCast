@@ -192,6 +192,10 @@ swift run castctl volume 192.168.1.20 0.3
 correlation, timeouts, cancellation, heartbeat failure detection, reconnection, and session
 lifecycle. The suite is clean under Thread Sanitizer.
 
+`castctl` was verified against an onn. 4K Streaming Box (Google TV): discovery, launch,
+HLS load, seek, pause, resume, volume, and control from separate connections while playback
+continues.
+
 ## Limitations
 
 - SwiftCast is a sender, not a receiver.

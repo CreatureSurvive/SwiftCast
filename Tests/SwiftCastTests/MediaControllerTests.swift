@@ -37,6 +37,29 @@ struct MediaControllerTests {
         #expect(mock.sentMessages(ofType: "LAUNCH").isEmpty)
     }
 
+    /// Web receivers shut down when their last sender sends an explicit
+    /// CLOSE, so disconnecting must leave application connections alone.
+    @Test func disconnectLeavesApplicationRunning() async throws {
+        let (client, mock) = try await connectedClient(appRunning: true)
+        _ = try await client.launchMediaReceiver()
+        await client.disconnect()
+        let closes = mock.sentMessages(ofType: "CLOSE").map(\.destinationID)
+        #expect(closes == [CastEndpoint.platformReceiver])
+    }
+
+    /// Replies to the controller's own requests must not be re-applied by
+    /// its listener, where a late GET_STATUS reply could erase a newer LOAD.
+    @Test func mediaSessionSurvivesAttachFollowedByLoad() async throws {
+        for _ in 0..<50 {
+            let (client, _) = try await connectedClient()
+            let media = try await client.launchMediaReceiver()
+            try await media.load(MediaInformation(url: URL(string: "https://example.com/v.mp4")!, contentType: "video/mp4"))
+            await Task.yield()
+            #expect(await media.status?.mediaSessionId == 1)
+            await client.disconnect()
+        }
+    }
+
     @Test func commandsRequireAMediaSession() async throws {
         let (client, _) = try await connectedClient()
         let media = try await client.launchMediaReceiver()

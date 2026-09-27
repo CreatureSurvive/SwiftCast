@@ -57,6 +57,9 @@ public final class CastSession {
 
     @ObservationIgnored private var connectionTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var mediaTask: Task<Void, Never>?
+    /// In-flight attach, shared so concurrent callers (a load and a receiver
+    /// status update) don't create competing controllers for one application.
+    @ObservationIgnored private var pendingAttach: (sessionID: String, task: Task<MediaController, any Error>)?
     @ObservationIgnored private var epoch = 0
     @ObservationIgnored private let makeClient: @Sendable (CastDevice) -> CastClient
 
@@ -215,8 +218,13 @@ public final class CastSession {
             }
         }
         let receiverTask = Task { [weak self] in
-            for await status in await client.receiverStatusUpdates() {
+            for await update in await client.receiverStatusUpdates() {
                 guard let self, currentEpoch == self.epoch else { return }
+                // Stream elements can be delivered after newer statuses have
+                // arrived (for example the pre-launch status after a LAUNCH
+                // reply), so act on the client's latest status instead.
+                let status = await client.receiverStatus ?? update
+                guard currentEpoch == self.epoch else { return }
                 self.receiverStatus = status
                 if status.application(self.appID) == nil, self.mediaController != nil {
                     self.detachMedia()
@@ -271,7 +279,13 @@ public final class CastSession {
         if let mediaController, mediaController.application.sessionId == app.sessionId, await !mediaController.isClosed {
             return mediaController
         }
-        let controller = try await client.mediaController(for: app)
+        if let pendingAttach, pendingAttach.sessionID == app.sessionId {
+            return try await pendingAttach.task.value
+        }
+        let task = Task { try await client.mediaController(for: app) }
+        pendingAttach = (app.sessionId, task)
+        defer { if pendingAttach?.sessionID == app.sessionId { pendingAttach = nil } }
+        let controller = try await task.value
         guard currentEpoch == epoch else { throw CastError.notConnected }
         mediaTask?.cancel()
         mediaController = controller
@@ -289,6 +303,7 @@ public final class CastSession {
     }
 
     private func detachMedia() {
+        pendingAttach = nil
         mediaTask?.cancel()
         mediaTask = nil
         mediaController = nil

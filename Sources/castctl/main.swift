@@ -40,7 +40,8 @@ func describe(_ status: MediaStatus?) {
     guard let status else { print("media: none"); return }
     let time = status.currentTime.map { String(format: "%.1fs", $0) } ?? "?"
     let duration = status.media?.duration.map { String(format: "%.1fs", $0) } ?? "?"
-    print("media: \(status.media?.metadata?.title ?? status.media?.contentId ?? "unknown") \(status.playerState.rawValue) \(time)/\(duration)")
+    let reason = status.idleReason.map { " (\($0.rawValue))" } ?? ""
+    print("media: \(status.media?.metadata?.title ?? status.media?.contentId ?? "unknown") \(status.playerState.rawValue)\(reason) \(time)/\(duration)")
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -78,6 +79,11 @@ do {
             metadata: .generic(title: url.lastPathComponent)
         ))
         describe(status)
+        // Follow the first few seconds so buffering failures are visible.
+        let updates = await media.statusUpdates()
+        let follower = Task { for await update in updates { describe(update) } }
+        try await Task.sleep(for: .seconds(8))
+        follower.cancel()
     case "pause", "resume", "stop", "seek":
         let status = try await client.receiver.getStatus()
         guard let app = status.foregroundApplication else { print("Nothing is playing."); break }

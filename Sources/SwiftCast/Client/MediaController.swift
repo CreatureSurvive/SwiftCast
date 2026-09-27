@@ -223,7 +223,10 @@ public actor MediaController {
     }
 
     /// Stops listening and closes the virtual connection to the application.
-    /// Does not stop the application; use ``ReceiverController/stop(_:)`` for that.
+    ///
+    /// Web receivers may shut down when their last connected sender closes
+    /// its connection explicitly. To leave playback running, disconnect the
+    /// client instead. To end playback deliberately, use ``ReceiverController/stop(_:)``.
     public func detach() async {
         await client.closeVirtualConnection(to: application.transportId)
         close()
@@ -254,9 +257,11 @@ public actor MediaController {
     }
 
     private func handleMedia(_ message: InboundMessage) {
-        guard message.type == "MEDIA_STATUS" else { return }
-        // Responses to our own requests are applied by the requester; applying
-        // twice is harmless but would emit duplicate updates.
+        // Responses to our own requests are applied by the requester, in
+        // request order. Applying them here as well would race with that: a
+        // late-delivered reply (such as the empty GET_STATUS sent on attach)
+        // could overwrite the newer status from a LOAD.
+        guard message.type == "MEDIA_STATUS", (message.requestID ?? 0) == 0 else { return }
         apply(message)
     }
 
