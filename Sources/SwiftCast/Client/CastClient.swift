@@ -238,6 +238,11 @@ public actor CastClient {
                     await self?.resolve(requestID, with: .failure(CastError.timeout))
                 }
                 pending[requestID] = PendingRequest(continuation: continuation, timeoutTask: timeoutTask)
+                if Task.isCancelled {
+                    // The cancellation handler may have run before registration.
+                    resolve(requestID, with: .failure(CancellationError()))
+                    return
+                }
                 Task {
                     do {
                         try await self.sendRaw(message)
