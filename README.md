@@ -1,5 +1,11 @@
 # SwiftCast
 
+[![CI](https://github.com/CreatureSurvive/SwiftCast/actions/workflows/ci.yml/badge.svg)](https://github.com/CreatureSurvive/SwiftCast/actions/workflows/ci.yml)
+[![Swift 6.0+](https://img.shields.io/badge/Swift-6.0+-F05138?logo=swift&logoColor=white)](https://swift.org)
+[![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20macOS%20%7C%20tvOS%20%7C%20visionOS-blue)](#requirements)
+[![Swift Package Manager](https://img.shields.io/badge/SwiftPM-compatible-brightgreen)](#installation)
+[![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+
 A pure-Swift Google Cast (Chromecast) **sender** for iOS, iPadOS, macOS, tvOS and visionOS.
 
 Google's official Cast SDK is closed source, iOS-only, heavy, and still built around Objective-C
@@ -43,11 +49,30 @@ try await media.pause()
 
 ## Installation
 
+Add SwiftCast to your `Package.swift`:
+
 ```swift
-.package(url: "https://github.com/CreatureSurvive/SwiftCast.git", from: "1.0.0")
+dependencies: [
+    .package(url: "https://github.com/CreatureSurvive/SwiftCast.git", from: "1.0.1"),
+],
+targets: [
+    .target(name: "MyApp", dependencies: ["SwiftCast"]),
+]
 ```
 
-Requires iOS 17, macOS 14, tvOS 17 or visionOS 1, and Swift 6.
+Or in Xcode, choose **File › Add Package Dependencies…** and enter
+`https://github.com/CreatureSurvive/SwiftCast`.
+
+### Requirements
+
+| Platform | Minimum |
+| --- | --- |
+| iOS | 17.0 |
+| macOS | 14.0 |
+| tvOS | 17.0 |
+| visionOS | 1.0 |
+
+Swift 6.0 (Xcode 16) or later, in Swift 6 language mode. No third-party dependencies.
 
 ### Info.plist (iOS, tvOS, visionOS)
 
@@ -204,7 +229,18 @@ continues.
 - It doesn't perform device authentication, which is optional for senders. Certificates are not
   validated because Cast devices present self-signed certificates.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md). Releases follow [Semantic Versioning](https://semver.org).
+
+## Contributing
+
+Issues and pull requests are welcome. Please run `swift test` before opening a pull request, and
+add tests for new behavior.
+
 ## License
 
-MIT. Google Cast and Chromecast are trademarks of Google LLC. This project is not affiliated with
+Available under the MIT license. See [LICENSE](LICENSE) for details.
+
+Google Cast and Chromecast are trademarks of Google LLC. This project is not affiliated with
 Google.
